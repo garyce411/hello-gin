@@ -15,8 +15,11 @@ var users = sync.Map{}
 
 // 用户结构体
 type User struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	Nickname     string `json:"nickname"`
+	Avatar       string `json:"avatar"`
+	Description  string `json:"description"`
 }
 
 // 进行子路由注册
