@@ -1,10 +1,8 @@
-# Go 工具链全量修炼 · Gin 项目实战路线图
+# Go 工具链修炼 · Gin 项目实战路线图
 
-> **目标**：以一个真实项目 **"Go Learning Hub"** 为载体，系统掌握 Go 标准库的每一个工具，建立从"会用"到"用好"的完整能力闭环。
->
+> **定位**：以一个真实项目为载体，通过"需求 → 思路 → 实现"的方式，在实战中自然掌握 Go 工具链。不背 API，只解决问题。
+
 > **前提**：已安装 Go 1.21+，已安装 Git，了解基本的 HTTP 概念。
->
-> **每个模块均为独立练习题，先独立思考，再查阅提示，最后参考答案。**
 
 ---
 
@@ -12,1405 +10,805 @@
 
 ### 我们要做什么
 
-构建一个 **Go Learning Hub** —— 类似于一个极简的在线题库 / 代码片段管理平台，后端用 Gin 框架，支持：
+构建一个 **Go Learning Hub** —— 极简在线题库 / 代码片段管理平台，后端用 Gin 框架，支持：
 
 - 用户注册登录（JWT）
 - 题目的增删改查（CRUD）
-- 用户提交代码并得到评测结果
 - 代码片段收藏 / 笔记功能
 - 管理后台（查看统计数据）
 - API 文档自动生成
 
-在这个过程中，**每个功能模块都刻意使用不同的标准库**，让你在实战中自然掌握工具链。
+### 学习思路
 
-### 章节速查
+每个章节遵循：
 
-| 章节 | 主题 | 核心库 |
-|------|------|--------|
-| 第一章 | 项目初始化与 strconv | `strconv` |
-| 第二章 | 路由、路径与 strings | `strings` |
-| 第三章 | 二进制数据与 bytes | `bytes`, `bufio` |
-| 第四章 | Unicode 国际化与 runes | `unicode`, `utf8` |
-| 第五章 | 动态反射与 reflect | `reflect` |
-| 第六章 | 内存操作与 unsafe | `unsafe` |
-| 第七章 | 单元测试与基准测试 | `testing` |
-| 第八章 | 错误处理与 errors | `errors`, `fmt` |
-| 第九章 | 并发上下文与 context | `context` |
-| 第十章 | HTTP 客户端与 net/http | `net/http`, `io` |
-| 第十一章 | Gin 框架核心与中间件 | `gin` |
-| 第十二章 | Gin + MySQL + Redis | `database/sql`, `go-redis` |
-| 第十三章 | GitHub 协作与 CI/CD | `git`, `gh` |
-| 第十四章 | 性能优化综合实战 | 全部库综合 |
+1. **产品需求**：这个功能要解决什么问题？
+2. **思路拆解**：你会怎么设计？有哪些边界情况？
+3. **验收标准**：功能完成时，什么状态算"对"？
 
 ---
 
-## 第一章 · strconv：字符串与数值的桥梁
+## 第一章 · 项目初始化与用户系统
 
-### 背景
+### 需求 1-1：用户注册与登录
 
-`strconv` 是 Go 中处理字符串与其他数据类型（bool、int、float、uint）之间转换的标准工具。在 Web 开发中，几乎所有从 HTTP 请求中获取的数字类参数（分页页码、ID、limit）都需要它。
+**产品需求**：用户使用邮箱密码注册，注册后可以登录获取 Token，之后的请求带上 Token 证明身份。
 
-### 核心 API
+**思路拆解**：
 
-```go
-// 字符串 → 其他类型
-strconv.Atoi(s string) (int, error)
-strconv.ParseInt(s string, base int, bitSize int) (int64, error)
-strconv.ParseUint(s string, base int, bitSize int) (uint64, error)
-strconv.ParseFloat(s string, bitSize int) (float64, error)
-strconv.ParseBool(s string) (bool, error)
+- 注册时密码不能明文存储，需要哈希。存什么？比对一个什么东西？
+- Token 用什么实现？存储在哪？过期了怎么办？
+- 登录频率限制怎么加？同一 IP 1 分钟最多试 5 次？
+- 错误处理：用户不存在、密码错误、参数缺失，返回的 HTTP 状态码分别是什么？
 
-// 其他类型 → 字符串
-strconv.Itoa(i int) string
-strconv.FormatInt(i int64, base int) string
-strconv.FormatUint(i uint64, base int) string
-strconv.FormatFloat(f float64, fmt byte, prec, bitSize int) string
-strconv.FormatBool(b bool) string
+**验收标准**：
+
+- 同一邮箱不能重复注册
+- 相同密码每次注册后哈希结果不同（加盐），但验证能通过
+- Token 过期后请求被拒绝，返回 401
+- 密码错误不提示"密码错误"，只提示"账号或密码错误"（防枚举）
+
+---
+
+### 需求 1-2：用户个人资料管理
+
+**产品需求**：用户登录后可以查看和修改自己的资料（昵称、头像、简介）。
+
+**思路拆解**：
+
+- 哪些字段可以修改，哪些不能修改？
+- 修改时参数校验：昵称长度限制？头像 URL 格式？
+- 并发修改同一个字段会发生什么？需要锁吗？
+- 头像 URL 需要验证有效性吗？还是只存一个字符串？
+
+**验收标准**：
+
+- 未登录状态无法访问，返回 401
+- 修改昵称为空字符串时返回 400
+- 修改成功返回更新后的数据
+
+---
+
+## 第二章 · 题目系统（CRUD）
+
+### 需求 2-1：题目列表与搜索
+
+**产品需求**：用户可以浏览题目列表，支持分页、按标题关键词搜索、按难度筛选。
+
+**思路拆解**：
+
+- 分页参数怎么传？`page=1&page_size=10` 还是 `offset=0&limit=10`？
+- 边界情况：`page=0`、`page=-1`、`page_size=1000` 怎么处理？
+- 搜索用 LIKE 查询还是全文索引？数据量小的时候可以先 LIKE
+- SQL 注入怎么防？ORM 能帮到你什么？
+- 列表接口需要返回总数吗？总页数怎么算？
+
+**验收标准**：
+
+- `page=1&page_size=10` 返回第 1-10 条
+- `page=2&page_size=10` 返回第 11-20 条
+- `page=0` 自动修正为 1，`page_size=200` 自动裁剪为 100
+- 搜索 `keyword=go` 返回标题包含 "go" 的题目（不区分大小写）
+- `difficulty=easy` 只返回简单难度的题目
+
+---
+
+### 需求 2-2：题目详情
+
+**产品需求**：用户可以查看某道题目的完整信息，包括题目描述、输入输出示例。
+
+**思路拆解**：
+
+- 题目不存在时返回什么？
+- URL 参数类型：`/problems/123` 还是 `/problems?id=123`？
+- 需要考虑整数越界：ID 超过 int64 范围怎么处理？
+- 详情接口会被频繁访问吗？需要加缓存吗？
+
+**验收标准**：
+
+- ID 为 0 或负数返回 400
+- ID 不存在返回 404
+- ID 格式非法（如非数字）返回 400
+
+---
+
+### 需求 2-3：创建题目（管理后台）
+
+**产品需求**：管理员可以创建新题目，包含标题、描述、难度、标签、测试用例。
+
+**思路拆解**：
+
+- 创建者怎么记录？请求头拿还是从登录态拿？
+- 测试用例怎么存？放在同一张表还是单独存？隐藏测试用例怎么设计？
+- 标题重复怎么办？要唯一吗？
+- 富文本描述怎么处理？XSS 攻击怎么防？
+
+**验收标准**：
+
+- 非管理员无法创建题目
+- 必填字段为空返回 400，并指明哪个字段
+- 创建成功后返回 201 和新题目 ID
+
+---
+
+### 需求 2-4：修改和删除题目
+
+**产品需求**：管理员可以修改题目的任意字段，或删除题目。
+
+**思路拆解**：
+
+- 删除是物理删除还是逻辑删除（软删除）？逻辑删除更常见
+- 修改时哪些字段不允许改？ID 和创建时间能改吗？
+- 并发修改同一题目：AB 两人同时修改，谁的生效？要不要乐观锁？
+- 删除后关联数据（提交记录）怎么处理？
+
+**验收标准**：
+
+- 修改后返回更新后的完整数据
+- 软删除的题目在列表中不再显示，但详情页可能需要返回 404
+- 删除后提交记录仍然保留（题目 ID 不能为空）
+
+---
+
+## 第三章 · 代码片段收藏系统
+
+### 需求 3-1：收藏功能
+
+**产品需求**：登录用户可以收藏感兴趣的代码片段，也可以取消收藏。
+
+**思路拆解**：
+
+- 收藏关系怎么存？`user_id` + `problem_id` 唯一索引？
+- 已经收藏过了再收藏怎么处理？幂等设计
+- 我的收藏列表怎么查？分页吗？
+- 收藏时需要记录时间吗？方便按时间排序吗？
+
+**验收标准**：
+
+- 同一用户收藏同一题目两次，只产生一条记录
+- 取消收藏后重新收藏仍然有效
+- 收藏列表按收藏时间倒序
+
+---
+
+### 需求 3-2：代码笔记
+
+**产品需求**：用户可以为每道题目写自己的解题笔记（Markdown 格式），支持更新和删除。
+
+**思路拆解**：
+
+- 笔记和题目是绑定的，用户不同但题目相同，算几条笔记？
+- 笔记支持版本历史吗？先不做，但表结构要留扩展口
+- 笔记内容超长怎么处理？上限多少？
+- 笔记需要支持 Markdown 渲染吗？后端存原始文本还是 HTML？
+
+**验收标准**：
+
+- 每个用户每道题目最多一条笔记
+- 笔记上限 10 万字，超出返回 400
+- 未登录无法操作笔记
+
+---
+
+## 第四章 · 中间件与系统基础设施
+
+### 需求 4-1：请求日志
+
+**产品需求**：记录每个请求的详细信息，便于排查问题和分析访问情况。
+
+**思路拆解**：
+
+- 记录什么？请求时间、请求方法、请求路径、响应状态、耗时、客户端 IP
+- 格式选纯文本还是 JSON？JSON 更适合后续日志收集和分析
+- 日志怎么输出？文件还是 stdout？日志轮转怎么办？
+- 高并发下日志 IO 是瓶颈，需要异步写吗？
+
+**验收标准**：
+
+- 每个请求输出一行 JSON 日志
+- 日志包含：时间戳、请求 ID、HTTP 方法、路径、状态码、耗时、客户端 IP
+- 日志不阻塞请求主流程（异步）
+- 敏感信息（Token、密码）不写入日志
+
+---
+
+### 需求 4-2：统一错误处理
+
+**产品需求**：所有接口的错误响应格式一致，便于前端统一处理。
+
+**思路拆解**：
+
+- 错误分几类？参数错误（400）、未认证（401）、未授权（403）、资源不存在（404）、服务器错误（500）
+- 错误信息需要国际化吗？前端提示语怎么设计？
+- 500 错误要返回具体信息吗？生产环境要隐藏内部细节
+- panic 了怎么处理？不能让整个服务崩掉
+
+**验收标准**：
+
+- 所有错误返回统一 JSON 格式：`{"code": xxx, "message": "xxx"}`
+- 不同类型的错误对应不同的 HTTP 状态码
+- 服务 panic 后返回 500，而不是进程崩溃
+- 错误信息不泄露数据库表结构、堆栈等内部信息
+
+---
+
+### 需求 4-3：限流
+
+**产品需求**：防止接口被滥用，限制单个 IP 或单个用户的请求频率。
+
+**思路拆解**：
+
+- 限流算法选哪个？固定窗口、滑动窗口、令牌桶、漏桶？各有什么优劣？
+- 计数器存在哪？内存（重启丢失）还是 Redis（多实例共享）？
+- 限流后返回 429 还是 503？提示信息怎么写？
+- 不同接口限流阈值不同？公开接口严限，私有接口宽松？
+
+**验收标准**：
+
+- 单 IP 每分钟最多 60 次请求（公开接口）
+- 超过限制返回 429 状态码
+- 限流计数器在进程重启后重置（内存方案）
+- 限流不影响已建立的长连接
+
+---
+
+### 需求 4-4：CORS 跨域
+
+**产品需求**：前端和后端可能部署在不同域名，需要支持跨域请求。
+
+**思路拆解**：
+
+- 哪些域名允许跨域？配置化还是全部允许？
+- 允许哪些 HTTP 方法？GET/POST/PUT/DELETE
+- 预检请求（OPTIONS）怎么处理？直接返回 200
+- 认证信息（Cookie）能跨域传递吗？
+- 生产环境用 Nginx 反向代理更合适，这里先做基础支持
+
+**验收标准**：
+
+- 正确返回 `Access-Control-Allow-Origin` 等必要头
+- OPTIONS 请求不触发业务逻辑，直接返回
+- 非法 Origin 被拒绝
+
+---
+
+## 第五章 · 查询参数与数据处理
+
+### 需求 5-1：复杂筛选条件
+
+**产品需求**：题目列表支持多条件组合筛选：难度 + 标签 + 创建时间范围 + 是否免费。
+
+**思路拆解**：
+
+- 参数怎么组织？Query String 还是 JSON Body？RESTful 用 Query String
+- 多个筛选条件怎么拼接 SQL？`WHERE 1=1` 还是动态拼接？
+- 时间范围怎么传？`created_after=2024-01-01&created_before=2024-12-31`
+- 筛选条件为空时怎么查？忽略该条件还是返回空？
+
+**验收标准**：
+
+- 所有筛选条件都是可选的，缺省则不作为筛选条件
+- 时间格式错误返回 400
+- 筛选条件组合正确生成 SQL WHERE 子句
+- 索引设计要考虑最常用的筛选条件
+
+---
+
+### 需求 5-2：导出与导入
+
+**产品需求**：管理员可以批量导出题目列表为 JSON/CSV，也可以导入 JSON/CSV 创建题目。
+
+**思路拆解**：
+
+- 大批量导出（成千上万条）怎么处理？一次性加载到内存会 OOM
+- CSV 中有非法数据（格式错误、必填缺失）怎么处理？跳过还是全部失败？
+- 导入时需要去重吗？根据什么去重？
+- 导入成功后返回什么？成功条数、失败条数、失败原因明细
+
+**验收标准**：
+
+- 导出支持 JSON 和 CSV 两种格式
+- 导入 1000 条题目，支持事务：全部成功或全部回滚（或者可配置）
+- 导入失败时详细报告哪一行有问题
+- 大文件导出使用流式处理，不一次性加载到内存
+
+---
+
+## 第六章 · 文件与资源管理
+
+### 需求 6-1：用户头像上传
+
+**产品需求**：用户可以上传自定义头像，支持 JPG、PNG、WebP，最大 2MB。
+
+**思路拆解**：
+
+- 存储在哪？本地磁盘还是云存储（S3/OSS）？云存储更可靠但需要账号
+- 文件名怎么起？用户上传的原始文件名可能冲突，用 UUID
+- 怎么防止恶意上传？文件类型验证（扩展名 + MIME）、文件内容检查
+- 头像需要裁剪吗？正方形裁剪还是任意比例？
+- 存储路径要不要加目录层级？避免单目录下文件过多
+
+**验收标准**：
+
+- 上传非图片类型返回 400
+- 上传超过 2MB 返回 413
+- 文件类型验证扩展名和 MIME 类型，不一致时返回 400
+- 返回访问头像的完整 URL
+
+---
+
+### 需求 6-2：文件分片上传
+
+**产品需求**：用户可以上传大文件（如题目附件），超过 10MB 时使用分片上传，单片 1MB。
+
+**思路拆解**：
+
+- 分片上传流程：初始化 → 上传分片 → 合并。怎么设计接口？
+- 并发上传多个分片，服务器怎么知道哪些收到了哪些没收到？
+- 分片上传到一半用户走了，临时文件怎么处理？定时清理？
+- MD5 校验：客户端传总分片 MD5，合并后验证，防止传错了
+- 合并是同步还是异步？大文件合并可能比较慢
+
+**验收标准**：
+
+- 支持并发上传分片，顺序无关
+- 已上传的分片不会重复上传（断点续传）
+- 合并前验证分片数量和 MD5
+- 合并失败时返回 500，已合并的部分清理掉
+- 临时文件 24 小时后自动清理
+
+---
+
+### 需求 6-3：静态资源服务
+
+**产品需求**：服务器需要提供上传文件的访问能力，支持根据 URL 直接访问文件。
+
+**思路拆解**：
+
+- 直接暴露文件目录有安全风险，怎么处理？禁止 `../` 遍历
+- 文件不存在时返回 404 还是重定向到默认图？
+- 大文件需要支持 Range 请求（断点续传 / 多线程下载）吗？
+- 文件访问需要权限控制吗？私有文件不能直接暴露 URL
+
+**验收标准**：
+
+- 正确的文件 URL 能下载对应文件
+- 尝试目录遍历（如 `../../etc/passwd`）返回 403
+- 不存在的文件返回 404
+
+---
+
+## 第七章 · 数据库与查询优化
+
+### 需求 7-1：关联查询
+
+**产品需求**：题目详情需要返回创建者用户名，创建者信息怎么关联？
+
+**思路拆解**：
+
+- 在题目表中存 `creator_id`，查详情时 JOIN 用户表
+- N+1 问题：列表接口查 10 条题目，如果每条都单独查用户，就是 11 次查询
+- 怎么处理 N+1？预加载（Preload）？还是 JOIN 一条 SQL 搞定？
+- 用户被删了怎么办？外键约束 ON DELETE SET NULL 还是查不到就显示 [已注销]？
+
+**验收标准**：
+
+- 详情接口返回题目 + 创建者用户名，不返回密码
+- 列表接口 10 条数据最多 2 条 SQL（一条查题目，一条 IN 查询创建者）
+- 用户不存在时，创建者字段显示为 [已注销]
+
+---
+
+### 需求 7-2：软删除与查询设计
+
+**产品需求**：题目删除用软删除（标记 `deleted_at` 时间戳），列表和详情查询自动排除已删除的。
+
+**思路拆解**：
+
+- 软删除的题目 ID 能复用吗？比如删掉 ID=5 的题目，新建的题目 ID 还是 5 吗？
+- 全局查询都加 `WHERE deleted_at IS NULL` 容易遗漏，怎么办？Repository 层统一封装
+- 真的需要彻底删除怎么办？管理员后台加"彻底删除"功能
+- 回收站功能：软删除后 N 天内可以恢复
+
+**验收标准**：
+
+- 所有查询自动过滤已删除记录，无需业务层每次手动加条件
+- 恢复删除后题目状态完全恢复
+
+---
+
+### 需求 7-3：索引与查询优化
+
+**产品需求**：上线后发现题目列表接口慢，需要优化。
+
+**思路拆解**：
+
+- 先查慢查询日志或开启 `EXPLAIN` 分析
+- WHERE 条件字段加索引：`difficulty`、`created_at`、组合索引 `(difficulty, created_at)`
+- 排序字段加索引：`ORDER BY created_at DESC`
+- 分页深度问题：`LIMIT 100000, 10` 为什么慢？改用游标分页（ID 分页）
+- 统计数据（总数）用缓存还是实时查？总数变化不频繁可以缓存
+
+**验收标准**：
+
+- `EXPLAIN` 显示查询使用了索引
+- 列表接口 P99 延迟 < 100ms（1000 条数据量）
+- 游标分页能快速定位到第 1000 页
+
+---
+
+## 第八章 · 缓存策略
+
+### 需求 8-1：热点数据缓存
+
+**产品需求**：热门题目的详情被频繁访问，每次都查数据库太浪费。
+
+**思路拆解**：
+
+- 缓存什么数据？题目详情、题目列表的某一页？
+- 存哪？本地内存（LRU）还是 Redis？多实例部署用 Redis
+- 缓存 key 怎么设计？`problem:{id}`、`problem:list:page:1:size:10`
+- 缓存 TTL 多长？5 分钟？题目更新了缓存怎么失效？
+
+**验收标准**：
+
+- 缓存命中时响应时间 < 5ms
+- 缓存未命中时正常查库并写入缓存
+- 题目更新后缓存自动失效
+- Redis 挂了不影响服务降级到直接查库
+
+---
+
+### 需求 8-2：缓存穿透与雪崩
+
+**产品需求**：缓存机制上线后遇到两个问题：恶意请求不存在的数据（缓存穿透）、大量缓存同时过期导致雪崩。
+
+**思路拆解**：
+
+- 穿透：数据库也不存在的 key 也缓存，空值缓存，TTL 短一些（1 分钟）
+- 雪崩：TTL 加随机偏移，不要让所有 key 同时过期
+- 缓存击穿：热点 key 过期瞬间大量请求同时穿透。互斥锁或永不过期 + 异步更新
+
+**验收标准**：
+
+- 请求不存在的 ID，返回正常（不是报错），缓存空值
+- 大量 key 同时过期时，数据库不会被打爆
+
+---
+
+## 第九章 · 并发与异步
+
+### 需求 9-1：批量操作
+
+**产品需求**：管理员可以批量审核题目（通过 / 拒绝），一次操作多条。
+
+**思路拆解**：
+
+- 批量操作是原子的吗？全成功或全失败用事务
+- 数据量大时（1000 条）怎么处理？拆分成小批次逐批处理
+- 处理过程中某条失败了怎么办？记录失败项，继续处理其他的，最后汇总报告
+- 批量操作需要加锁吗？防止并发修改同一资源
+
+**验收标准**：
+
+- 批量操作使用事务，原子性有保障
+- 支持部分成功，结果中明确告知哪些成功哪些失败
+- 事务超时时间要设置，防止长事务锁表
+
+---
+
+### 需求 9-2：异步任务
+
+**产品需求**：文件上传完成后需要触发一些后处理（生成缩略图、扫描病毒、更新统计），不能阻塞用户请求。
+
+**思路拆解**：
+
+- 异步任务怎么实现？Goroutine + Channel？消息队列（RabbitMQ/RocketMQ）？
+- 任务失败了怎么办？重试？最多重试几次？
+- 任务状态怎么追踪？Pending → Running → Done / Failed
+- 用户怎么知道任务完成了？轮询？WebSocket？先做简单的轮询
+
+**验收标准**：
+
+- 文件上传接口立即返回，异步任务在后台执行
+- 任务执行失败时记录错误日志，并重试 3 次
+- 提供任务状态查询接口
+
+---
+
+### 需求 9-3：请求超时控制
+
+**产品需求**：每个接口都设置超时时间，防止慢查询或外部服务卡死拖垮整个服务。
+
+**思路拆解**：
+
+- 读接口超时：5 秒查不完就超时
+- 写接口超时：10 秒处理不完就超时
+- 超时后数据库连接怎么处理？Context cancel 后连接归还连接池
+- 不同环境超时不同？测试环境可以设长一点方便调试
+
+**验收标准**：
+
+- 任何接口的响应时间不超过 30 秒（全局兜底）
+- 外部依赖超时不影响其他接口
+- 超时后返回 504 Gateway Timeout
+
+---
+
+## 第十章 · 认证与会话
+
+### 需求 10-1：JWT 实现细节
+
+**产品需求**：登录成功后签发 JWT Token，后续请求通过 Token 认证。
+
+**思路拆解**：
+
+- Token 包含哪些 Claims？user_id、用户名、过期时间、签发时间
+- Token 过期了怎么办？Refresh Token 机制（过期前可以用 Refresh Token 换新的）
+- Token 泄露了怎么办？黑名单机制？短期有效降低风险
+- 多设备登录怎么管理？需要记录活跃 Token 吗？
+- HTTPS 是前提吗？Token 放 URL 参数比 Header 更危险
+
+**验收标准**：
+
+- Token 包含 user_id、过期时间、签发时间
+- Token 被篡改后验证失败（签名校验）
+- Token 过期后请求返回 401
+- 提供 Refresh Token 接口（可选实现）
+
+---
+
+### 需求 10-2：权限控制
+
+**产品需求**：普通用户和管理员的接口权限不同，管理员可以操作普通用户不能操作的接口。
+
+**思路拆解**：
+
+- 权限信息存哪？数据库还是配置文件？
+- 基于角色的权限控制（RBAC）：User → Role → Permission
+- 权限检查在中间件做还是业务层做？中间件做更统一
+- 权限变更后实时生效吗？还是等 Token 刷新？
+
+**验收标准**：
+
+- 普通用户访问管理员接口返回 403
+- 权限检查发生在请求处理之前
+- 不同角色的 Token 结构一致，权限信息由数据库动态查询
+
+---
+
+## 第十一章 · API 设计
+
+### 需求 11-1：RESTful 路由设计
+
+**产品需求**：设计一套清晰的 API 路由，遵循 RESTful 规范。
+
+**思路拆解**：
+
+- 资源命名：题目是 `problems` 还是 `problem`？RESTful 用复数名词
+- 嵌套资源：`/problems/:id/submissions` 合理，但 `/users/:id/problems/:id/comments` 太深了
+- 动作：创建用 POST，读取用 GET，更新用 PUT/PATCH，删除用 DELETE
+- 搜索算 GET 还是 POST？复杂查询建议 POST + JSON Body
+
+**路由清单**：
+
+```
+公开：
+  POST   /auth/register          注册
+  POST   /auth/login             登录
+
+用户（需认证）：
+  GET    /users/me               当前用户信息
+  PUT    /users/me               修改当前用户信息
+  GET    /users/me/favorites     我的收藏
+
+题目（公开）：
+  GET    /problems               题目列表
+  GET    /problems/:id           题目详情
+
+题目（需认证）：
+  POST   /problems               创建题目（管理员）
+  PUT    /problems/:id           修改题目（管理员）
+  DELETE /problems/:id           删除题目（管理员）
+
+收藏（需认证）：
+  POST   /favorites              收藏题目
+  DELETE /favorites/:problem_id  取消收藏
+
+笔记（需认证）：
+  POST   /notes                  创建笔记
+  PUT    /notes/:problem_id      更新笔记
+  GET    /notes/:problem_id      获取笔记
+  DELETE /notes/:problem_id      删除笔记
+
+管理（需认证，管理员）：
+  GET    /admin/stats            统计数据
 ```
 
-### 练习题
+**验收标准**：
+
+- 所有接口遵循 HTTP 语义（GET 不修改数据，POST 创建，PUT 全量更新）
+- 接口路径符合 RESTful 规范
 
 ---
 
-#### 1-1：Query 参数解析器
-
-**难度**：⭐
-
-**题目**：编写一个函数 `ParseQueryInt(c *gin.Context, key string, defaultVal int) (int, error)`，从 Gin 的 `c.Request.URL.Query()` 中读取 key 对应的值，如果不存在或解析失败则返回 defaultVal。
-
-**要求**：
-- 使用 `strconv.Atoi` 解析
-- 错误只作为"降级"信号，不 panic
-- 编写 3 个以上的单元测试（包含正常值、缺失 key、非法格式三种 case）
-
-**扩展**：
-- 扩展为 `ParseQueryFloat(key string, defaultVal float64) (float64, error)`
-- 扩展为 `ParseQueryBool(key string, defaultVal bool) (bool, error)`
-
----
-
-#### 1-2：分页器
-
-**难度**：⭐⭐
-
-**题目**：为题目列表接口设计分页参数解析。
-
-**要求**：
-- 参数：`page`（第几页，默认为 1）、`page_size`（每页条数，默认为 10，上限 100）
-- 函数签名：`func ParsePagination(c *gin.Context) (page, pageSize, offset, limit int)`
-- `pageSize` 超过 100 时自动裁剪为 100
-- `page` 小于 1 时自动修正为 1
-- 使用 `strconv.Atoi` + 手动校验，不能依赖第三方库
-
-**扩展**：
-- 返回总页数（需要查数据库 count）
-- 支持 `cursor` 分页模式（基于上一页最后一条记录的 ID）
-
----
-
-#### 1-3：ID 安全校验
-
-**难度**：⭐⭐
-
-**题目**：编写一个中间件 `ValidateIDParam(paramName string)`，从 URL 参数中读取 ID，进行严格校验：
-- 不能为空
-- 必须是正整数
-- 不能超出 `int64` 范围
-- 校验失败返回 400 Bad Request，并附带 JSON 错误信息
-
-**要求**：
-- 核心用 `strconv.ParseUint` + `strconv.FormatUint`
-- 用 `errors.New` 构造自定义错误类型
-- 中间件函数签名：`func ValidateIDParam(paramName string) gin.HandlerFunc`
-
-**扩展**：
-- 支持 UUID 格式校验（自学 `google/uuid` 或 `github.com/google/uuid`）
-- 支持雪花 ID 格式（自学 `github.com/sony/sonyflake`）
-
----
-
-## 第二章 · strings：文本处理的瑞士军刀
-
-### 背景
-
-`strings` 包提供了最常用的字符串操作：分割、拼接、大小写转换、裁剪、查找、替换等。在 Gin 项目中，路由匹配、请求头解析、模板渲染、日志处理都离不开它。
-
-### 核心 API
-
-```go
-// 裁剪
-strings.Trim(s, cutset string) string
-strings.TrimSpace(s string) string
-strings.TrimPrefix(s, prefix string) string
-strings.TrimSuffix(s, suffix string) string
-
-// 分割与拼接
-strings.Split(s, sep string) []string
-strings.SplitN(s, sep string, n int) []string
-strings.Join(elems []string, sep string) string
-
-// 大小写
-strings.ToLower(s string) string
-strings.ToUpper(s string) string
-strings.ToTitle(s string) string
-strings.Title(s string) string  // 每个单词首字母大写
-
-// 查找
-strings.Contains(s, substr string) bool
-strings.HasPrefix(s, prefix string) bool
-strings.HasSuffix(s, suffix string) bool
-strings.Index(s, substr string) int
-strings.LastIndex(s, substr string) int
-
-// 替换
-strings.Replace(s, old, new string, n int) string
-strings.ReplaceAll(s, old, new string) string
-
-// 统计
-strings.Count(s, substr string) int
-strings.Fields(s string) []string  // 按空白字符分割
-
-// 拼接优化
-strings.Builder
-strings.Reader
-```
-
-### 练习题
-
----
-
-#### 2-1：路由前缀与路径解析
-
-**难度**：⭐
-
-**题目**：编写一个函数 `NormalizePath(path string) string`，对 URL 路径做规范化处理：
-- 去除首尾空白
-- 去除末尾的 `/`（除非 path 就是 `/`）
-- 多个连续斜杠替换为单个 `/`
-- 转为小写
-
-**要求**：
-- 至少用 `strings.Trim`、`strings.ReplaceAll`、`strings.HasSuffix`、`strings.TrimSuffix` 四种方法
-- 编写完整的表驱动测试（至少 8 个 case）
-
-**示例**：
-```
-"/api//users///"   → "/api/users"
-"/Admin/Users/"    → "/admin/users"
-"  /api/v1/  "     → "/api/v1"
-"/"                → "/"
-```
-
----
-
-#### 2-2：请求头安全过滤
-
-**难度**：⭐⭐
-
-**题目**：编写一个函数 `FilterHeaders(rawHeaders map[string]string) (safeHeaders map[string]string, dangerous bool)`，对 HTTP 请求头进行安全检查：
-- 过滤掉 `X-Forwarded-For`、`X-Real-IP`、`Cookie` 等敏感头（要求保留但标记）
-- 拒绝包含 `\r\n`（换行注入）的头
-- 返回过滤后的安全头列表和是否有危险标记
-
-**要求**：
-- 用 `strings.Contains`、`strings.ToLower`、`strings.Split` 实现
-- 用 `strings.Builder` 高效拼接日志输出
-- 编写单元测试覆盖正常请求、注入攻击、多种敏感头
-
----
-
-#### 2-3：搜索关键词高亮
-
-**难度**：⭐⭐⭐
-
-**题目**：编写一个函数 `Highlight(text, keyword string) string`，将文本中所有匹配的关键词用 `<mark>` 标签包裹。
-
-**要求**：
-- 搜索不区分大小写（用 `strings.ToLower` 归一化）
-- 不替换掉已有的 `<mark>` 标签内的内容
-- 关键词边界处理：不能切断 HTML 标签或 entity
-- 示例：`Highlight("Go is great, golang too", "go")` → `"<mark>Go</mark> is great, <mark>Go</mark>lang too"`
-
-**扩展**：
-- 支持多个关键词（`[]string`）
-- 支持正则表达式（引入 `regexp` 包自学，结合 `regexp.MatchString`）
-
----
-
-#### 2-4：CSV 字段解析
-
-**难度**：⭐⭐
-
-**题目**：实现一个 CSV 行解析器 `ParseCSVLine(line string) ([]string, error)`，处理带引号和转义的 CSV 格式：
-- 字段可被双引号包裹
-- 引号内可以有逗号
-- 双引号在引号内用 `""` 表示
-- 支持自定义分隔符（默认逗号）
-
-**要求**：
-- 不使用 `encoding/csv`，手写实现
-- 用 `strings.Split`、`strings.TrimSpace` 处理非引号部分
-- 用状态机思维（引号内 / 引号外）处理引号部分
-- 边界条件：空行、引号不闭合、连续的引号
-
----
-
-## 第三章 · bytes 与 bufio：二进制与流的世界
-
-### 背景
-
-`bytes` 包操作 `[]byte`（字节切片），`bufio` 包提供带缓冲的读写。两者在处理 HTTP 请求体（二进制或流式数据）、文件操作、网络协议解析时不可或缺。
-
-### 核心 API
-
-```go
-// bytes
-bytes.NewBuffer(buf []byte) *Buffer
-bytes.NewReader(buf []byte) *Reader
-bytes.Buffer{}  // 可变长缓冲
-bytes.Join(s [][]byte, sep []byte) []byte
-bytes.Split(s, sep []byte) [][]byte
-bytes.Contains(b, subslice []byte) bool
-bytes.Equal(a, b []byte) bool
-bytes.Compare(a, b []byte) int
-bytes.Runes(b []byte) []rune  // bytes → runes
-
-// bufio
-bufio.NewReader(r io.Reader) *Reader
-bufio.NewWriter(w io.Writer) *Writer
-bufio.NewScanner(r io.Reader) *Scanner  // 按行/词扫描
-```
-
-### 练习题
-
----
-
-#### 3-1：请求体内存复用（Buffer Pool）
-
-**难度**：⭐⭐
-
-**题目**：实现一个 `BodyPool`，复用 `bytes.Buffer` 减少 GC 压力：
-- `Get() *bytes.Buffer`：获取一个 buffer，自动 Reset
-- `Put(b *bytes.Buffer)`：归还 buffer（超过池子上限时丢弃）
-- 在 Gin 中间件里用 Pool 包装请求体读取
-- 编写 Benchmark 对比使用 Pool vs 不使用 Pool 的性能差异
-
-**要求**：
-- 使用 `sync.Pool`（第十章会深入）
-- 用 `bytes.NewBuffer`、`b.Reset()`、`b.Write` 等操作
-- Benchmark 用 `testing.B`，至少运行 10000 次迭代
-
-**扩展**：
-- 支持 Pool 的容量上限（超过 64KB 的 buffer 不回收）
-
----
-
-#### 3-2：分块传输编码（Chunked Encoding）
-
-**难度**：⭐⭐⭐
-
-**题目**：用 `bufio.Reader` 实现一个简单的 HTTP 分块响应：
-- 模拟一个大文件的流式读取
-- 按固定大小 chunk（比如 4KB）读取文件
-- 每个 chunk 前面输出十六进制长度
-- 最后一个 chunk 输出 `0\r\n\r\n` 表示结束
-
-**要求**：
-- 用 `bufio.NewReaderSize` 和 `bufio.NewWriterSize`
-- 用 `bytes.Buffer` 组装 chunk 头
-- 参考 HTTP/1.1 Transfer-Encoding: chunked 规范
-- 用 `net/http/httptest` 发起测试请求验证格式正确性
-
-**示例**：
-```
-5\r\n
-hello\r\n
-0\r\n
-\r\n
-```
-
----
-
-#### 3-3：二进制协议解析
-
-**难度**：⭐⭐⭐⭐
-
-**题目**：实现一个极简的 Redis RESP 协议解析器（只支持简单字符串和整数）：
-- RESP 协议格式：`+OK\r\n`、`-ERR\r\n`、`:100\r\n`、`-1`（null）、Bulk String
-- 用 `bytes.Reader` 或 `bufio.Reader` 从 `[]byte` 读取
-- 返回解析后的值和下一个读取位置
-
-**要求**：
-- 函数签名：`func ParseRESP(data []byte) (interface{}, int, error)`
-- 支持 `+`（简单字符串）、`-`（错误）、`:`（整数）、`$`（Bulk String）
-- 用 `bytes.SplitN`、`bytes.HasPrefix` 判断类型
-- 完整测试所有 RESP 类型
-
-**扩展**：
-- 支持 Array 类型（`*`开头）
-- 参考：https://redis.io/docs/reference/protocol-spec/
-
----
-
-## 第四章 · unicode 与 utf8：Unicode 全攻略
-
-### 背景
-
-Go 中 `string` 是 UTF-8 字节序列，`rune` 是 Unicode 码点（int32 的别名）。处理中文、日文、emoji、多语言场景时，必须正确处理 Unicode。`unicode` 包提供 Unicode 分类判断，`utf8` 包提供 UTF-8 编解码。
-
-### 核心 API
-
-```go
-// rune 遍历
-for i, r := range "hello世界" { }  // i 是字节索引，r 是 rune
-
-// unicode 包
-unicode.IsLetter(r rune) bool
-unicode.IsDigit(r rune) bool
-unicode.IsUpper(r rune) bool
-unicode.IsLower(r rune) bool
-unicode.IsSpace(r rune) bool
-unicode.IsPunct(r rune) bool
-unicode.IsMark(r rune) bool  // 变音符号
-unicode.ToUpper(r rune) rune
-unicode.ToLower(r rune) rune
-unicode.ToTitle(r rune) rune
-
-// utf8 包
-utf8.RuneCountInString(s string) int
-utf8.DecodeRuneInString(s string) (r rune, size int)
-utf8.DecodeRune(p []byte) (r rune, size int)
-utf8.EncodeRune(p []byte, r rune) int
-utf8.FullRune(p []byte) bool
-utf8.Valid(p []byte) bool
-utf8.ValidString(s string) bool
-```
-
-### 练习题
-
----
-
-#### 4-1：字符分类统计
-
-**难度**：⭐⭐
-
-**题目**：编写 `AnalyzeText(text string) TextStats`，统计一段文本中各类字符的数量：
-
-```go
-type TextStats struct {
-    TotalBytes    int
-    TotalRunes    int
-    Letters       int
-    Digits         int
-    Spaces         int
-    ChineseChars   int  // CJK统一汉字
-    Punct          int
-    Emoji          int  // emoji 范围 U+1F300 - U+1F9FF
-    MaxRuneLen     int  // 最长的 rune 序列（字节数）
+### 需求 11-2：统一响应格式
+
+**产品需求**：所有 API 响应格式统一，前端好处理。
+
+**思路拆解**：
+
+- 成功和失败的格式统一吗？还是区分开？
+- 分页响应的格式怎么设计？和普通数据格式一致吗？
+- 时间格式用 ISO8601 还是时间戳？
+- 字段命名用 camelCase 还是 snake_case？
+
+**响应格式**：
+
+```json
+// 成功
+{
+  "code": 0,
+  "message": "success",
+  "data": { ... }
+}
+
+// 列表（分页）
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [...],
+    "total": 100,
+    "page": 1,
+    "page_size": 10
+  }
+}
+
+// 失败
+{
+  "code": 10001,
+  "message": "参数错误",
+  "errors": [
+    {"field": "username", "message": "用户名不能为空"}
+  ]
 }
 ```
 
-**要求**：
-- 用 `for i, r := range text` 遍历
-- 用 `unicode.IsLetter`、`unicode.IsDigit`、`unicode.IsSpace` 判断
-- 用 `unicode.SimpleFold` 检测中文
-- 用 `utf8.RuneCount` 验证
-- 至少 10 个单元测试用例（包含纯英文、纯中文、emoji 混合、空字符串等）
+**验收标准**：
+
+- 所有成功响应 `code` 为 0，`message` 为 "success"
+- 所有失败响应 `code` 不为 0，`message` 说明原因
+- 分页列表格式统一包含 `items`、`total`、`page`、`page_size`
+- HTTP 状态码与业务 code 含义一致
 
 ---
 
-#### 4-2：Unicode 归一化（模拟 NFC/NFD）
+### 需求 11-3：接口版本管理
 
-**难度**：⭐⭐⭐
+**产品需求**：API 未来可能发生变化，通过版本控制实现平滑升级。
 
-**题目**：实现一个 Unicode 归一化函数 `NormalizeString(s string, mode string) string`：
-- `mode = "upper"`：全部转为大写（使用 `unicode.ToUpper` 逐 rune 处理）
-- `mode = "lower"`：全部转为小写
-- `mode = "title"`：每个单词首字母大写（需要判断单词边界）
+**思路拆解**：
 
-**要求**：
-- 不能直接用 `strings.ToUpper` / `strings.ToLower`（需要逐 rune 处理）
-- 用 `unicode.SpecialCase` 处理特殊大小写映射（如 `İ` → `i̇`）
-- 用 `utf8.EncodeRune` 将处理后的 rune 写回字节数组
+- 版本放哪？URL 路径（`/api/v1/`）还是请求头（`Accept: application/vnd.api.v1+json`）？
+- 路径版本更直观，便于调试和测试
+- v1 和 v2 同时维护多久？要不要提供迁移文档？
 
-**扩展**：
-- 实现完整的 NFD 分解（将组合字符分离为基础字符 + 组合符号），可参考 `unicode/norm` 标准库
+**验收标准**：
 
----
-
-#### 4-3：UTF-8 验证与修复
-
-**难度**：⭐⭐⭐
-
-**题目**：编写一个 `ValidateAndFixUTF8(data []byte) ([]byte, error)` 函数：
-- 用 `utf8.Valid` 检查数据是否有效 UTF-8
-- 如果无效，找出所有无效字节序列的位置
-- 用 `unicode.ReplacementChar`（U+FFFD）替换无效字节
-- 返回修复后的数据和所有错误位置列表
-
-**要求**：
-- 用 `utf8.FullRune`、`utf8.DecodeRune` 手写验证逻辑
-- 不能用 `strings.ToValidUTF8`（那是 Go 1.15 新加的）
-- 构造各种无效 UTF-8 测试用例（截断、多字节首字节错误、过长编码等）
-
-**扩展**：
-- 实现 `utf8string` 包风格的链式调用：
-  `NewUTF8String(data).ToUpper().TrimSpace().Reverse().String()`
+- 当前所有接口在 `/api/v1/` 下
+- 新增接口可以直接在 `/api/v2/` 下实现
+- 老版本接口在废弃前有明确提示
 
 ---
 
-## 第五章 · reflect：反射与动态世界
+## 第十二章 · 部署与运维
 
-### 背景
+### 需求 12-1：配置管理
 
-`reflect` 包让你在运行时检查变量的类型和值，是构建通用工具（ORM、DI 容器、序列化库、验证器）的基石。但反射有性能开销，生产代码应谨慎使用。
+**产品需求**：不同环境（开发、测试、生产）的配置不同，需要分离。
 
-### 核心 API
+**思路拆解**：
 
-```go
-reflect.TypeOf(i interface{}) reflect.Type
-reflect.ValueOf(i interface{}) reflect.Value
-reflect.Kind  // 如 reflect.Struct, reflect.Slice, reflect.Int
+- 配置怎么组织？环境变量？配置文件（YAML/TOML）？优先级？
+- 敏感信息（数据库密码、API Key）怎么管理？不能写死在代码里
+- 配置热更新？修改配置后不用重启服务
+- 多实例部署时配置一致性怎么保证？
 
-// 结构性检查
-v.Kind() == reflect.Struct
-v.NumField() int
-v.Field(i int) reflect.Value
-v.FieldByName(name string) reflect.Value
-v.Type().Field(i).Tag  // 获取 struct tag
+**验收标准**：
 
-// 指针和接口
-v.Elem() reflect.Value  // 解引用
-v.Interface() interface{}  // 转回 interface{}
-v.CanSet() bool  // 是否可写
-
-// 动态调用
-v.Method(i int).Call(args []reflect.Value)
-v.FieldByIndex(index []int) reflect.Value  // 嵌套字段
-
-// 切片和 map
-v.Len() int
-v.Index(i int) reflect.Value
-v.MapKeys()
-v.MapIndex(key reflect.Value) reflect.Value
-```
-
-### 练习题
+- 开发环境、测试环境、生产环境配置分离
+- 敏感信息不写在代码或配置文件中（用环境变量注入）
+- `go run` 能在本地正常启动
 
 ---
 
-#### 5-1：通用结构体验证器
+### 需求 12-2：健康检查
 
-**难度**：⭐⭐⭐
+**产品需求**：部署后需要健康检查接口，用于负载均衡或容器编排判断实例是否可用。
 
-**题目**：用 `reflect` 实现一个结构体标签验证器：
+**思路拆解**：
 
-```go
-// 标签用法示例
-type User struct {
-    Name  string `validate:"required,min=2,max=50"`
-    Age   int    `validate:"required,min=0,max=150"`
-    Email string `validate:"required,email"`
-    URL   string `validate:"url"`
-}
-```
+- 简单检查：`/health` 返回 200，服务在线
+- 深度检查：检查数据库连接、Redis 连接是否正常
+- 什么状态算不健康？依赖挂了算吗？
 
-**要求**：
-- 实现 `ValidateStruct(s interface{}) error`
-- 支持的验证规则：
-  - `required`：非空（string 非空，int > 0，指针非 nil）
-  - `min=X`：最小值 / 最小长度
-  - `max=X`：最大值 / 最大长度
-  - `email`：邮箱格式（简单正则）
-  - `len=X`：精确长度
-  - `oneof=a,b,c`：枚举
-- 遍历所有字段，用 `v.Field(i).Tag.Get("validate")` 读取标签
-- 在 Gin 中间件中使用这个验证器
+**验收标准**：
+
+- `/health` 接口返回 200 和健康状态
+- 可选：`/ready` 接口检查所有依赖可用后才返回 200
 
 ---
 
-#### 5-2：通用 JSON 扁平化
+### 需求 12-3：优雅关闭
 
-**难度**：⭐⭐⭐
+**产品需求**：服务需要优雅关闭，处理完正在处理的请求后再退出。
 
-**题目**：用 `reflect` 实现一个函数 `FlattenJSON(v interface{}, prefix string) map[string]interface{}`，将嵌套的 struct/map 扁平化为单层 map：
+**思路拆解**：
 
-**要求**：
-- 嵌套 struct 字段用点号连接：`user.address.city`
-- 嵌套 slice 用索引：`items.0.name`、`items.1.name`
-- 嵌套 map 用 key：`config.db.host`
-- 支持递归（struct 里嵌套 struct、slice 里嵌套 map）
-- 用 `v.Kind()` 判断类型分支（Struct、Map、Slice、Primitive）
+- 收到 SIGTERM 信号后：停止接收新请求、等待现有请求处理完、关闭数据库连接、退出
+- 等待多久？最多 30 秒，超时强制退出
+- WebSocket 或长连接怎么处理？单独通知客户端
 
-**示例**：
-```go
-type Address struct { City string `json:"city"` }
-type User struct { Name string; Addr Address }
-FlattenJSON(User{Name: "Alice", Addr: Address{City: "Beijing"}})
-// → {"Name": "Alice", "Addr.City": "Beijing"}
-```
+**验收标准**：
+
+- `kill` 命令发送 SIGTERM 后，服务在 30 秒内优雅退出
+- 退出时无 panic，日志正常输出
 
 ---
 
-#### 5-3：动态结构体创建
+## 第十三章 · 文档与协作
 
-**难度**：⭐⭐⭐⭐
+### 需求 13-1：接口文档
 
-**题目**：实现一个 `DynamicBuilder`，能根据 map 创建任意类型的 struct 实例：
+**产品需求**：需要一份完整且最新的 API 文档，供前端和其他开发者参考。
 
-```go
-func BuildStruct(data map[string]interface{}, target interface{}) error
-```
+**思路拆解**：
 
-**要求**：
-- `target` 是指向 struct 的指针，用 `reflect.TypeOf` 获取类型
-- 遍历 struct 的每个字段，从 `data` 中按字段名或 JSON tag 取值
-- 自动做类型转换（如 `float64` → `int`，`string` → `int`）
-- 处理 `time.Time`（RFC3339 格式字符串 → Time）
-- 处理 `url.Values`（Gin 的 form 解析结果）到 struct 的映射
+- 手写文档容易过时，能不能从代码注释或代码本身生成？
+- OpenAPI (Swagger) 规范是目前主流，配套工具丰富
+- Gin 生态有 `swag init` 自动生成 Swagger JSON/UI
 
-**扩展**：
-- 实现 `ToMap`（struct → map），利用 `v.Field(i).Interface()`
-- 在 Gin 的 `ShouldBind` 自定义实现中集成（`customBinding`）
+**验收标准**：
 
----
-
-## 第六章 · unsafe：内存操作的禁区
-
-### 背景
-
-`unsafe` 允许绕过 Go 的类型安全，直接操作内存。使用场景极少（性能关键代码、C 互操作、底层数据结构），但理解它是理解 Go 内存模型的关键。**警告：在生产代码中非必要不使用。**
-
-### 核心 API
-
-```go
-// 指针转换
-unsafe.Pointer(p *T) unsafe.Pointer
-unsafe.Add(ptr unsafe.Pointer, n uintptr) unsafe.Pointer  // Go 1.17+
-unsafe.Offsetof(st.field) uintptr
-unsafe.Sizeof(v T) uintptr
-
-// 特殊用法
-// 将 []byte 转为 string（零拷贝）
-func BytesToString(b []byte) string {
-    return *(*string)(unsafe.Pointer(&b))
-}
-// 将 string 转为 []byte（零拷贝）
-func StringToBytes(s string) []byte {
-    return *(*[]byte)(unsafe.Pointer(&s))
-}
-```
-
-### 练习题
-
----
-
-#### 6-1：零拷贝字符串转换
-
-**难度**：⭐⭐⭐
-
-**题目**：实现两个函数：
-- `StringToBytesUnsafe(s string) []byte`：不分配内存，将 string 转为 []byte
-- `BytesToStringUnsafe(b []byte) string`：不分配内存，将 []byte 转为 string
-
-**要求**：
-- 使用 `unsafe.Pointer` 和指针类型转换实现
-- 写 Benchmark 对比 unsafe 版本 vs `[]byte(s)` / `string(b)` 的性能
-- Benchmark 至少运行 1,000,000 次
-- 分析内存分配差异（用 `testing.B.ReportMetric` 报告 alloc/op）
-
-**思考**：
-- 转换后的 `[]byte` 是否可以修改？（答案是**不能**，会导致未定义行为）
-- 什么场景下这种零拷贝是有价值的？（高并发短字符串处理）
-
----
-
-#### 6-2：结构体内存布局分析
-
-**难度**：⭐⭐⭐⭐
-
-**题目**：编写一个 `StructLayout(t reflect.Type)` 函数，打印任意 struct 的内存布局：
-
-```go
-type LayoutInfo struct {
-    FieldName  string
-    TypeName   string
-    Offset     uintptr
-    Size       uintptr
-    Alignment  uintptr
-    IsPadded   bool
-}
-```
-
-**要求**：
-- 用 `reflect.TypeOf` 获取类型，用 `t.NumField()` 和 `t.Field(i)` 遍历
-- 用 `unsafe.Offsetof`、`unsafe.Sizeof` 获取字段偏移和大小
-- 判断是否有内存空洞（padding）
-- 打印类似 C 语言 `sizeof` 报告的格式
-
-**扩展**：
-- 分析标准库中 `time.Time`、`sync.Mutex` 等结构的内存布局
-- 验证是否符合 Go 内存对齐规则
-
----
-
-#### 6-3：slice 头结构探秘
-
-**难度**：⭐⭐⭐⭐
-
-**题目**：通过 `unsafe` 手动构建一个 slice，深入理解 slice 的内部结构：
-
-```go
-type SliceHeader struct {
-    Data uintptr  // 指向底层数组的指针
-    Len  int      // 长度
-    Cap  int      // 容量
-}
-```
-
-**要求**：
-- 用 `unsafe.Pointer` 将 `[]int{1,2,3}` 的地址强转为 `*SliceHeader`
-- 验证 Data、Len、Cap 的值
-- 通过修改 SliceHeader 手动 append 一个元素（不使用 append 关键字）
-- 理解 slice 和 array 的关系
-
-**警告**：
-- 这个练习仅用于学习，不要在生产代码中这样做
-
----
-
-## 第七章 · testing：质量保障体系
-
-### 背景
-
-Go 的 `testing` 包是标准测试框架，支持单元测试、性能测试（benchmark）、示例测试、子测试、子基准测试、Fuzzing 测试。Go 1.21 引入了 `testing.Testing()` 和 `slices`/`maps` 标准库。
-
-### 核心 API
-
-```go
-// 基础测试
-func TestXxx(t *testing.T)
-func BenchmarkXxx(b *testing.B)
-func ExampleXxx()  // 示例测试，输出与注释对比
-
-// 子测试
-t.Run(name string, f func(t *testing.T))
-t.Parallel()  // 并行运行子测试
-
-// 断言风格
-t.Fatal / t.Fatalf  // 测试失败即停止
-t.Error / t.Errorf  // 测试失败继续执行
-t.Skip / t.Skipf    // 跳过测试
-
-// Benchmark
-b.ReportMetric(float64, "ns/op")    // 自定义指标
-b.ResetTimer()
-b.RunParallel(func(pb *testing.PB){})
-
-// Fuzzing (Go 1.18+)
-func FuzzXxx(f *testing.F)
-```
-
-### 练习题
-
----
-
-#### 7-1：表驱动测试重构
-
-**难度**：⭐
-
-**题目**：将以下散乱的测试代码重构为表驱动测试：
-
-```go
-// 原代码（伪代码，不要真的写这种风格）
-func TestAdd(t *testing.T) {
-    if add(1, 2) != 3 { t.Fatal("fail") }
-    if add(0, 0) != 0 { t.Fatal("fail") }
-    if add(-1, 1) != 0 { t.Fatal("fail") }
-    // ... 更多 case 线性叠加
-}
-```
-
-**要求**：
-- 重构为标准表驱动测试格式（`cases []struct{...}` + `for _, tc := range cases`）
-- 每个 case 包含：`name`（子测试名）、`input`、期望值`、`wantErr`（是否期望错误）
-- 用 `t.Run(tc.name, func(t *testing.T) { ... })` 创建子测试
-- 添加至少 10 个 case（边界值、空输入、负数、超大数等）
-
----
-
-#### 7-2：Mock 接口测试
-
-**难度**：⭐⭐
-
-**题目**：为以下接口编写 Mock，实现完整的单元测试：
-
-```go
-type UserRepository interface {
-    FindByID(id int64) (*User, error)
-    Create(user *User) error
-    Update(user *User) error
-    Delete(id int64) error
-    List(page, pageSize int) ([]*User, int64, error)
-}
-```
-
-**要求**：
-- 手写 Mock 结构体（不需要第三方 Mock 库）
-- 在 Mock 中用 `sync.RWMutex` 保护 map 模拟内存存储
-- 实现"期望失败"的 Mock（通过构造函数参数注入）
-- 用子测试验证每个方法
-- 用 `t.Run("FindByID/not_found", ...)` 的子测试组织
-
-**扩展**：
-- 用 `github.com/stretchr/testify/assert` 的 `assert.Equal` 等断言
-
----
-
-#### 7-3：Benchmark 性能分析
-
-**难度**：⭐⭐⭐
-
-**题目**：对第一章的分页器函数进行完整的性能分析：
-
-**要求**：
-- 编写 `BenchmarkParsePagination`（至少 10,000,000 次迭代）
-- 用 `b.ReportAllocs()` 报告内存分配
-- 对比三种实现：
-  1. 纯 `strconv.Atoi`（baseline）
-  2. 手动手写解析（`for` 循环 + 乘法）
-  3. 正则表达式方案
-- 使用 `go test -bench=. -benchmem -cpuprofile=cpu.out` 生成 CPU profile
-- 用 `go tool pprof` 分析热点（命令行或可视化）
-
-**扩展**：
-- 用 `go test -fuzz` 对分页参数做模糊测试
-- 用 `stretchr/testify/require` 的 `Eventually` 做异步测试
-
----
-
-#### 7-4：Golden File 测试
-
-**难度**：⭐⭐
-
-**题目**：实现一个 JSON 响应的 Golden File 测试框架：
-
-**要求**：
-- 第一次运行测试时，如果 golden 文件不存在，则自动生成（写文件）
-- 后续运行测试时，对比实际输出与 golden 文件内容
-- golden 文件命名：`testdata/<testname>.golden`
-- 用 `os.WriteFile` / `os.ReadFile` 或 `os.Create`
-- 用 `filepath.Join` 构建路径
-- 处理 `encoding/json` 输出的格式化（`json.MarshalIndent`）
-
----
-
-## 第八章 · errors 与 fmt：错误处理艺术
-
-### 背景
-
-Go 1.13+ 引入的 `errors` 包（`errors.Is`、`errors.As`）配合 `fmt.Errorf` 的 `%w` 包装，实现了错误链。理解错误类型而非错误消息是做防御性编程的关键。
-
-### 核心 API
-
-```go
-errors.New(s string) error
-errors.Is(err, target error) bool
-errors.As(err error, target interface{}) bool
-errors.Join(errs ...error) error  // Go 1.20+
-
-fmt.Errorf("...: %w", err)  // 包装错误
-%v %+v %q %s %d  // 各格式化动词
-fmt.Sprintf / fmt.Printf / fmt.Println
-```
-
-### 练习题
-
----
-
-#### 8-1：自定义错误类型体系
-
-**难度**：⭐⭐
-
-**题目**：为题库系统设计一套分层错误类型：
-
-```go
-// 顶层接口
-type Coder interface {
-    Code() int  // HTTP 状态码映射
-}
-
-// 各层错误
-type ValidationError struct { Field, Msg string }
-type NotFoundError struct { Resource string; ID interface{} }
-type UnauthorizedError struct{}
-type InternalError struct{ Cause error }
-type ConflictError struct{ Msg string }
-```
-
-**要求**：
-- 每个错误类型实现 `Error() string` 和 `Coder` 接口
-- 用 `errors.New` 或自定义构造函数创建
-- 用 `errors.As` 在业务层按类型处理
-- 在 Gin 中间件中统一处理错误（根据 `Coder.Code()` 返回对应 HTTP 状态码）
-
----
-
-#### 8-2：错误日志与堆栈
-
-**难度**：⭐⭐⭐
-
-**题目**：实现一个错误日志中间件，记录每个请求的错误信息：
-
-**要求**：
-- 捕获所有 panic，恢复后记录错误和堆栈
-- 用 `runtime.Callers` + `runtime.Stack` 获取堆栈信息
-- 用自定义 JSON 格式输出：`{"time","level","error","stack","request_id"}`
-- 支持不同日志级别（Debug / Info / Warn / Error / Fatal）
-- 用 `fmt.Sprintf` + `strings.Builder` 高效拼接
-
-**扩展**：
-- 使用 `log/slog`（Go 1.21+ 结构化日志）重构
-
----
-
-## 第九章 · context：并发取消与超时
-
-### 背景
-
-`context` 是 Go 并发编程的核心，用于：
-- 请求作用域的取消信号（用户断开连接 → 取消数据库查询）
-- 超时控制（SQL 查询超过 5 秒自动终止）
-- 传递请求级别的值（trace_id、user_id）
-
-### 核心 API
-
-```go
-context.Background() context.Context
-context.TODO() context.Context
-context.WithCancel(parent) (ctx, cancel func)
-context.WithTimeout(parent, d time.Duration) (ctx, cancel func)
-context.WithDeadline(parent, t time.Time) (ctx, cancel func)
-context.WithValue(parent, key, val) context.Context
-ctx.Err()  // 错误原因：Canceled 或 DeadlineExceeded
-```
-
-### 练习题
-
----
-
-#### 9-1：超时控制的数据库查询
-
-**难度**：⭐⭐
-
-**题目**：模拟一个"用户画像查询"场景，需要并发查询三个数据源（用 goroutine 模拟）：
-- 用户基本信息（耗时 100ms）
-- 用户行为日志（耗时 200ms）
-- 用户偏好推荐（耗时 150ms）
-
-**要求**：
-- 总超时时间 500ms
-- 任意一个超时则整体失败
-- 用 `context.WithTimeout` + `select` + `ctx.Done()` 实现
-- 用 `sync.WaitGroup` 等待所有 goroutine 完成
-- 返回最先返回的数据（"竞速"）
-
-**扩展**：
-- 实现"所有数据都成功才返回"（类似 `Promise.all`）
-- 实现"最多等待 N 个"（用 channel 限流）
-
----
-
-#### 9-2：请求链路追踪
-
-**难度**：⭐⭐⭐
-
-**题目**：实现一个带 trace_id 的请求链路：
-
-**要求**：
-- Gin 中间件：从请求头 `X-Request-ID` 读取 trace_id，如果没有则生成 UUID
-- 将 trace_id 存入 `context.WithValue`
-- 在日志、数据库操作、HTTP 客户端调用中通过 `FromContext` 获取 trace_id
-- 打印结构化日志：`{"trace_id":"xxx","event":"db_query","duration_ms":12}`
-
-**扩展**：
-- 实现 OpenTelemetry 风格的 span 嵌套（自学 `go.opentelemetry.io/otel`）
-
----
-
-## 第十章 · net/http、io、os：I/O 全景
-
-### 背景
-
-标准库 `net/http` 不仅是 Gin 的底层依赖，也是做 HTTP 客户端、文件服务、微服务通信的工具箱。`io`/`os` 包提供底层 I/O 抽象。
-
-### 核心 API
-
-```go
-// net/http 服务端
-http.HandleFunc / http.Handle
-http.ListenAndServe(addr string, handler Handler)
-http.Server{Addr, Handler, ReadTimeout, WriteTimeout}
-http.ResponseWriter, http.Request
-http.StatusOK, http.StatusBadRequest ...
-
-// net/http 客户端
-http.Get(url) (*http.Response, error)
-http.NewRequest(method, url, body) (*http.Request, error)
-http.Client{Timeout, Transport}
-http.DefaultClient
-
-// io
-io.ReadAll(r io.Reader) ([]byte, error)
-io.Copy(w io.Writer, r io.Reader) (int64, error)
-io.ReadFull(r io.Reader, buf []byte) (int, error)
-io.LimitReader(r io.Reader, n int64) io.Reader
-io.MultiReader(m ...io.Reader) io.Reader
-io TeeReader(r io.Reader, w io.Writer) io.Reader
-
-// os
-os.Open(name string) (*os.File, error)
-os.ReadFile(name string) ([]byte, error)
-os.WriteFile(name string, data []byte, perm FileMode) error
-os.MkdirAll(path string, perm FileMode) error
-```
-
-### 练习题
-
----
-
-#### 10-1：HTTP 客户端封装
-
-**难度**：⭐⭐
-
-**题目**：实现一个类型安全的 HTTP 客户端：
-
-```go
-type HTTPClient struct {
-    BaseURL    string
-    Client     *http.Client
-    Headers    map[string]string
-}
-```
-
-**要求**：
-- 实现 `Get`、`Post`、`Put`、`Delete` 方法
-- 自动添加 `Content-Type: application/json`
-- 自动注入 `trace_id`（从 context）
-- 实现自动重试（GET 请求失败时最多重试 3 次，间隔 100ms/200ms/400ms）
-- 用 `httptest.NewServer` 启动测试服务器，写集成测试
-
----
-
-#### 10-2：文件分片上传与断点续传
-
-**难度**：⭐⭐⭐⭐
-
-**题目**：实现一个分片文件上传服务：
-
-**要求**：
-- 客户端：将文件按 1MB 分片，逐片上传，携带 shard_index 和 total_shards
-- 服务端：接收分片，写入临时目录
-- 所有分片接收完毕后，合并为完整文件
-- 支持断点续传：客户端可以查询已接收的分片列表，只上传缺失的分片
-- 用 `os.Create`/`os.Write`/`os.Open` 实现分片读写
-
-**扩展**：
-- 用 `filepath.Join` 和 `os.MkdirAll` 管理上传目录
-- 实现 SHA256 分片校验
-
----
-
-#### 10-3：流式响应（Server-Sent Events）
-
-**难度**：⭐⭐⭐
-
-**题目**：用 `net/http`（不用 Gin）实现一个 SSE（Server-Sent Events）接口：
-
-**要求**：
-- HTTP header：`Content-Type: text/event-stream`
-- 每秒向客户端推送一条消息（当前时间戳）
-- 消息格式：`data: {"time":"2024-01-01T12:00:00Z"}\n\n`
-- 客户端断开连接时正确关闭 goroutine（用 `context` + `select`）
-- 用 `httptest.NewServer` 测试连接生命周期
-
----
-
-## 第十一章 · Gin 框架核心
-
-### 练习题
-
----
-
-#### 11-1：路由分组与中间件链
-
-**难度**：⭐
-
-**题目**：设计题库系统的 API 路由结构：
-
-```go
-// 路由分组
-/                          → 公开
-  /auth/register           → POST
-  /auth/login              → POST
-
-/api/v1/                   → 需要认证
-  /users                   → GET (列表), POST (创建)
-  /users/:id               → GET, PUT, DELETE
-  /problems                → GET (列表), POST (创建)
-  /problems/:id            → GET, PUT, DELETE
-  /problems/:id/submit     → POST (提交代码)
-  /problems/:id/testcases  → GET (获取测试用例)
-  /submissions/:id         → GET (查看评测结果)
-```
-
-**要求**：
-- 用 `router.Group()` 实现分组
-- 用 JWT 中间件保护私有路由
-- 用 `CORS` 中间件（手写，不用库）
-- 路由注册函数签名：`func RegisterRoutes(r *gin.Engine, srv *Server)`
-
----
-
-#### 11-2：自定义 Binding
-
-**难度**：⭐⭐⭐
-
-**题目**：实现自定义的 `FormBinding`（支持 `application/x-www-form-urlencoded`）和 `TOML Binding`：
-
-**要求**：
-- 实现 `Bind(*http.Request, obj interface{}) error` 接口
-- TOML Binding：解析 `application/x-toml` 请求体
-- 在 Gin 的 `ShouldBind` 中注册自定义 binding
-- 用 `reflect` + `strings.Split` + `strconv` 手动实现（不用第三方库）
-
----
-
-#### 11-3：中间件系统
-
-**难度**：⭐⭐
-
-**题目**：编写以下 Gin 中间件（全部手写，不用第三方库）：
-
-1. **Logger 中间件**：记录每个请求的 method、path、status_code、latency、client_ip、trace_id
-2. **RateLimiter 中间件**：基于 IP 的限流（滑动窗口算法，使用 `sync.RWMutex` + `map`）
-3. **Recover 中间件**：捕获 panic，返回 JSON 500 错误
-4. **Timeout 中间件**：对每个请求单独设置超时（`context.WithTimeout`）
-
-**要求**：
-- 每个中间件独立，接口签名：`func(...) gin.HandlerFunc`
-- 中间件可组合（`r.Use(m1, m2, m3)`）
-- 编写测试验证每个中间件的行为
-
----
-
-## 第十二章 · 数据库与缓存
-
-### 练习题
-
----
-
-#### 12-1：泛型 Repository 模式
-
-**难度**：⭐⭐⭐
-
-**题目**：使用 Go 1.18+ 泛型实现一个通用的 Repository：
-
-```go
-type Repository[T any] struct {
-    db    *sql.DB
-    table string
-}
-```
-
-**要求**：
-- 实现 `Create(ctx context.Context, entity *T) error`
-- 实现 `FindByID(ctx context.Context, id int64) (*T, error)`
-- 实现 `FindAll(ctx context.Context, offset, limit int) ([]*T, int64, error)`
-- 实现 `Update(ctx context.Context, entity *T) error`
-- 实现 `Delete(ctx context.Context, id int64) error`
-- 使用 `reflect` 动态获取表名（从 struct 名推导）
-- 在 Gin 中注册 UserRepository 和 ProblemRepository
-
----
-
-#### 12-2：Redis 缓存层
-
-**难度**：⭐⭐⭐
-
-**题目**：为题库接口添加 Redis 缓存：
-
-**要求**：
-- 用 `github.com/redis/go-redis/v9`
-- 缓存题目详情（`problem:{id}`，TTL 5 分钟）
-- 缓存题目列表（`problems:list:page:{page}:size:{size}`，TTL 1 分钟）
-- 实现缓存穿透保护（空结果也缓存，但 TTL 短）
-- 实现缓存雪崩保护（TTL 加随机偏移）
-- 用 `Pipeline` 批量写入
-- 编写完整的单元测试（可以用 miniredis）
-
----
-
-## 第十三章 · GitHub 协作与 CI/CD
-
-### 背景
-
-这一章不是 Go 代码练习，而是 GitHub 协作流程和 CI/CD 的实战训练。在实际项目中，代码质量和协作规范同样重要。
-
-### 练习题
-
----
-
-#### 13-1：Git 分支策略与工作流
-
-**难度**：⭐
-
-**题目**：为题库系统设计 Git 分支策略并执行：
-
-**要求**：
-- 创建以下分支：`main`、`develop`、`feature/xxx`、`hotfix/xxx`
-- 从 `develop` 创建 `feature/strconv-validator` 分支
-- 实现练习 1-3 的功能
-- 用 `git rebase -i`（squash）合并到 develop
-- 创建 Pull Request，设置 required reviewers（模拟代码审查）
-
----
-
-#### 13-2：.gitignore 与 Git 钩子
-
-**难度**：⭐
-
-**题目**：编写项目的 `.gitignore` 和自定义 Git 钩子：
-
-**要求**：
-- `.gitignore` 忽略：二进制文件、`.env`（但保留 `.env.example`）、IDE 配置、`vendor/`（如果不用 Go Modules）、测试覆盖率报告
-- 实现 `pre-commit` 钩子：运行 `go fmt` 检查（`gofmt -l`）
-- 实现 `commit-msg` 钩子：强制 commit message 格式：`type(scope): description`
-  - type: `feat`、`fix`、`docs`、`test`、`refactor`、`chore`
-  - 用正则表达式验证
-- 将钩子文件放入 `.git/hooks/`（或用 `git config core.hooksPath`）
-
----
-
-#### 13-3：GitHub Actions CI/CD
-
-**难度**：⭐⭐
-
-**题目**：为项目编写完整的 GitHub Actions 工作流：
-
-**要求**：
-创建 `.github/workflows/ci.yml`：
-
-1. **Push 到 PR 时**（自动触发）：
-   - `go vet` 静态检查
-   - `go test -race -coverprofile=coverage.out -covermode=atomic ./...`
-   - 上传覆盖率报告到 Codecov（`codecov/codecov-action`）
-
-2. **合并到 main 时**：
-   - 编译二进制：`GOOS=linux GOARCH=amd64 go build -o bin/server ./cmd/server`
-   - 编译 Windows 版本：`GOOS=windows`
-   - 编译 macOS 版本：`GOOS=darwin`
-   - 用 `actions/upload-artifact` 上传二进制文件
-
-3. **定时任务**（每周一凌晨 3 点）：
-   - `go mod tidy` 检查依赖更新
-   - 生成依赖报告（`go list -m all`）
-
-4. **在 PR 中自动评论**：
-   - 使用 `go list -f '{{.ImportPath}} {{.Version}}' -m all` 列出依赖版本
-   - 自动评论到 PR 中，告知依赖变更情况
-
-**扩展**：
-- 添加 Docker 构建步骤（`docker build` + `docker push`）
-- 添加 `golangci-lint` 高级检查
-
----
-
-#### 13-4：语义化版本与 Changelog 自动生成
-
-**难度**：⭐⭐
-
-**题目**：实现基于 Git Tag 的语义化版本管理：
-
-**要求**：
-- 使用 `git tag` 管理版本（`v1.0.0`）
-- 使用 `github.com/Masterminds/semver` 或 `golang.org/x/mod/semver` 解析版本号
-- 实现 `bump` 命令：
-  - `bump patch`：1.0.0 → 1.0.1
-  - `bump minor`：1.0.0 → 1.1.0
-  - `bump major`：1.0.0 → 2.0.0
-- 用 `git tag` + `git push` 自动打标签
-- 自动生成 CHANGELOG（从 commit message 中提取 feat/fix/docs，按类型分组）
-
----
-
-## 第十四章 · 综合实战：构建完整的题库系统
-
-### 背景
-
-前面的每一章都是一个独立的练习点。本章要求将所有知识点串联起来，构建一个真正可以运行的题库系统。
-
-### 练习题
-
----
-
-#### 14-1：项目结构设计（架构图）
-
-**难度**：⭐
-
-**题目**：设计 Gin 题库系统的项目结构，并实际创建：
-
-```
-go-learning-hub/
-├── cmd/
-│   └── server/
-│       └── main.go
-├── internal/
-│   ├── config/
-│   │   └── config.go
-│   ├── handler/
-│   │   ├── user.go
-│   │   ├── problem.go
-│   │   ├── submission.go
-│   │   └── auth.go
-│   ├── middleware/
-│   │   ├── auth.go
-│   │   ├── logger.go
-│   │   ├── ratelimit.go
-│   │   └── recovery.go
-│   ├── model/
-│   │   ├── user.go
-│   │   ├── problem.go
-│   │   └── submission.go
-│   ├── repository/
-│   │   ├── user_repo.go
-│   │   └── problem_repo.go
-│   ├── service/
-│   │   ├── user_svc.go
-│   │   ├── problem_svc.go
-│   │   └── judge_svc.go  # 代码评测服务
-│   ├── validator/
-│   │   └── validator.go  # reflect 验证器
-│   └── router/
-│       └── router.go
-├── pkg/
-│   ├── errors/
-│   │   └── errors.go
-│   ├── response/
-│   │   └── response.go   # 统一 JSON 响应
-│   └── tools/
-│       └── bytesconv/    # unsafe 零拷贝
-│       └── strutil/      # strings 工具集
-│       └── unicodeutil/  # unicode 工具集
-├── testdata/
-├── scripts/
-│   ├── migrate.sql
-│   └── seed.sql
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── go.mod
-├── go.sum
-└── Makefile
-```
-
-**要求**：
-- 实际创建所有目录和文件（空文件即可）
-- 编写 `Makefile`，包含：`make build`、`make test`、`make run`、`make clean`、`make lint`
-- 用 `go mod init` 初始化项目
-
----
-
-#### 14-2：统一响应与错误处理
-
-**难度**：⭐⭐
-
-**题目**：设计并实现统一的 API 响应格式：
-
-**要求**：
-```go
-// 统一响应格式
-type Response struct {
-    Code    int         `json:"code"`     // 业务码（0=成功）
-    Message string      `json:"message"`  // 消息
-    Data    interface{} `json:"data,omitempty"`
-    TraceID string      `json:"trace_id,omitempty"`
-    Errors  []FieldError `json:"errors,omitempty"`  // 字段级错误
-}
-```
-
-- 实现 `Success(c *gin.Context, data interface{})`
-- 实现 `Fail(c *gin.Context, code int, message string)`
-- 实现 `ValidationFail(c *gin.Context, errors []FieldError)`
-- 用 `reflect` 从 `Response` struct 的 json tag 中提取字段名
-- 在中间件中统一包装所有响应（后置处理）
-
----
-
-#### 14-3：代码评测沙箱
-
-**难度**：⭐⭐⭐⭐
-
-**题目**：实现一个极简的代码评测服务（不涉及真实安全沙箱，仅练习数据结构）：
-
-**要求**：
-- 题目模型包含：输入示例、输出示例、隐藏测试用例（JSON 存储在 MySQL 的 `text` 字段中，用 `bytes.Buffer` + `json.Marshal` 序列化）
-- 提交代码后，读取测试用例（用 `os.ReadFile`），用正则表达式模拟运行结果（练习 2-3 的 `Highlight`）
-- 用 `context.WithTimeout` 设置评测超时（5 秒）
-- 用 `reflect` 动态调用不同语言的"评测函数"（实际上只模拟返回）
-- 评测结果：Pending → Running → Accepted / Wrong Answer / Time Limit Exceeded
-
-**扩展**：
-- 引入 `os/exec` 执行真实的 Python/Java 代码（非常危险，仅供学习）
-
----
-
-#### 14-4：性能对比报告
-
-**难度**：⭐⭐⭐
-
-**题目**：对项目中的关键路径进行性能基准测试，生成对比报告：
-
-**要求**：
-- 对比 `strings.Builder` vs `fmt.Sprintf` vs `+` 拼接（练习 2-1 涉及）
-- 对比 `bytes.Buffer` vs `[]byte` 手动拼接
-- 对比 `strconv.Atoi` vs 纯手写解析
-- 对比 `StringToBytesUnsafe` vs `[]byte(s)`（练习 6-1 涉及）
-- 生成 Markdown 格式的对比报告表格
-
-**格式**：
-```markdown
-| 方法 | 每次操作耗时 | 内存分配 | 适用场景 |
-|------|------------|---------|---------|
-| ... | ... | ... | ... |
-```
+- 运行 `swag init` 生成 `docs/swagger.json`
+- 启动服务后可通过 `/swagger/index.html` 查看交互式文档
+- 文档包含所有接口的请求参数、响应格式、错误码说明
 
 ---
 
 ## 学习顺序建议
 
 ```
-第1-2周：第一章 + 第二章（strconv + strings）
-第3周：第三章（bytes） + 第四章（unicode）
-第4-5周：第五章（reflect） + 第六章（unsafe）
-第6-7周：第七章（testing）
-第8-9周：第八章（errors） + 第九章（context）
-第10周：第十章（net/http）
-第11-12周：第十一章（Gin 框架）
-第13周：第十二章（数据库） + 第十三章（GitHub）
-第14周：第十四章（综合实战）
+第1周：第一章（用户系统）—— 项目初始化、Gin 基础、项目结构
+第2周：第二章（题目 CRUD）—— 数据库操作、分页、参数校验
+第3周：第三章（收藏笔记）—— 数据关联、一对多关系
+第4周：第四章（中间件）—— 日志、错误处理、限流、CORS
+第5周：第五章（查询与导出）—— 复杂筛选、文件 I/O
+第6周：第六章（文件管理）—— 上传、存储、安全验证
+第7周：第七章（数据库优化）—— 索引、N+1、软删除
+第8周：第八章（缓存）—— Redis、穿透、雪崩
+第9周：第九章（并发与异步）—— 批量任务、超时控制
+第10周：第十章（认证与权限）—— JWT、RBAC
+第11周：第十一章（API 设计）—— RESTful、版本、响应格式
+第12周：第十二章（部署）—— 配置管理、健康检查、优雅关闭
+第13周：第十三章（文档）—— Swagger 文档生成
+第14周：收尾 —— 代码审查、性能优化、README 编写
 ```
-
-## 验收标准
-
-每个章节完成后，你的代码应满足：
-
-1. **功能正确**：所有单元测试通过（`go test ./... -v`）
-2. **代码规范**：通过 `gofmt` 和 `go vet`（`golangci-lint` 更佳）
-3. **测试覆盖**：核心函数覆盖率 ≥ 70%（`go test -coverprofile`）
-4. **有意义的 commit message**：符合 `type(scope): description` 格式
-5. **Benchmark 有记录**：关键路径的性能数据有记录（在 README 或独立文件中）
 
 ---
 
-*文档版本：v1.0 | 更新日期：2026-03-25*
+## 验收标准
+
+每个模块完成后，代码应满足：
+
+1. **功能完整**：接口能正常调用，数据正确存储和返回
+2. **边界处理**：各种异常输入有合理响应，不 panic、不 500
+3. **代码结构清晰**：分层合理（handler/service/repository），无超长函数
+4. **配置分离**：敏感信息通过环境变量注入，不硬编码
+5. **测试覆盖**：核心逻辑有单元测试或集成测试
+6. **接口文档**：Swagger 文档与实际接口一致
+
+---
+
+*文档版本：v2.0 | 更新日期：2026-03-25*
